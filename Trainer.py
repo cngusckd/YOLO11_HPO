@@ -55,11 +55,19 @@ from ultralytics.utils.torch_utils import (
     unset_deterministic,
 )
 
+from ultralytics.nn.tasks import DetectionModel
 from ultralytics.models.yolo.detect import DetectionTrainer
 
 
 
 class YOLODetectionTrainer(DetectionTrainer):
+
+    def get_model(self, cfg=None, weights=None, verbose=True):
+        """구성 파일(cfg)과 가중치(weights)를 사용하여 YOLO 모델을 로드합니다."""
+        model = DetectionModel(cfg, nc=self.data["nc"], verbose=verbose)
+        if weights:
+            model.load(weights)
+        return model
 
     def _do_train(self, world_size):
         """Train completed, evaluate and plot if specified by arguments."""

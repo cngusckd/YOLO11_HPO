@@ -8,6 +8,7 @@ from optuna.samplers import GridSampler, TPESampler
 from optuna.pruners import HyperbandPruner, SuccessiveHalvingPruner
 from ultralytics import YOLO
 
+from Trainer import HPO_Trainer
 
 # 탐색 공간 설정 로드
 with open('hpo_search_space.yaml') as f:

@@ -6,9 +6,68 @@ import numpy as np
 
 from optuna.samplers import GridSampler, TPESampler
 from optuna.pruners import HyperbandPruner, SuccessiveHalvingPruner
+
 from ultralytics import YOLO
 
-from Trainer import HPO_Trainer
+
+
+from ultralytics.nn.tasks import DetectionModel
+from ultralytics.models.yolo.detect import DetectionTrainer
+
+
+class CustomModel(DetectionModel):
+    def __init__(self, cfg = 'yolo11n.yaml', ch=3, nc = 20, verbose = True):
+        super().__init__()
+        """Initialize the YOLO detection model with the given config and parameters."""
+        super().__init__()
+        self.yaml = cfg if isinstance(cfg, dict) else yaml_model_load(cfg)  # cfg dict
+        if self.yaml["backbone"][0][2] == "Silence":
+            LOGGER.warning(
+                "WARNING ⚠️ YOLOv9 `Silence` module is deprecated in favor of torch.nn.Identity. "
+                "Please delete local *.pt file and re-download the latest model checkpoint."
+            )
+            self.yaml["backbone"][0][2] = "nn.Identity"
+
+        # Define model
+        ch = self.yaml["ch"] = self.yaml.get("ch", ch)  # input channels
+        if nc and nc != self.yaml["nc"]:
+            LOGGER.info(f"Overriding model.yaml nc={self.yaml['nc']} with nc={nc}")
+            self.yaml["nc"] = nc  # override YAML value
+        self.model, self.save = parse_model(deepcopy(self.yaml), ch=ch, verbose=verbose)  # model, savelist
+        self.names = {i: f"{i}" for i in range(self.yaml["nc"])}  # default names dict
+        self.inplace = self.yaml.get("inplace", True)
+        self.end2end = getattr(self.model[-1], "end2end", False)
+
+        # Build strides
+        m = self.model[-1]  # Detect()
+        if isinstance(m, Detect):  # includes all Detect subclasses like Segment, Pose, OBB, WorldDetect
+            s = 256  # 2x min stride
+            m.inplace = self.inplace
+
+            def _forward(x):
+                """Performs a forward pass through the model, handling different Detect subclass types accordingly."""
+                if self.end2end:
+                    return self.forward(x)["one2many"]
+                return self.forward(x)[0] if isinstance(m, (Segment, Pose, OBB)) else self.forward(x)
+
+            m.stride = torch.tensor([s / x.shape[-2] for x in _forward(torch.zeros(1, ch, s, s))])  # forward
+            self.stride = m.stride
+            m.bias_init()  # only run once
+        else:
+            self.stride = torch.Tensor([32])  # default stride for i.e. RTDETR
+
+        # Init weights, biases
+        initialize_weights(self)
+        if verbose:
+            self.info()
+            LOGGER.info("")
+
+class CustomTrainer(DetectionTrainer):
+    def get_model(self, cfg, weights):
+        """Returns a customized detection model instance configured with specified config and weights."""
+        return CustomModel(...)
+
+
 
 # 탐색 공간 설정 로드
 with open('hpo_search_space.yaml') as f:
@@ -18,60 +77,40 @@ with open('hpo_search_space.yaml') as f:
 with open('hpo_arguments.yaml') as f:
     args = yaml.safe_load(f)
 
-# TPE, PRuning => 매 epoch마다 학습 => 추론 => pruning
-## 1 epoch 학습 시키고 여러가지 파라미터에 대해서 => 성능지표로 pruning
-## n epoch 학습시킨 결과들을가지고 => sampling
 
 def objective(trial):
-    
-    # YOLO 모델 및 Trainer 생성
+    # 하이퍼파라미터 범위 설정
+    lr0 = trial.suggest_float('lr0', 1e-5, 1e-1, log=True)
+    momentum = trial.suggest_float('momentum', 0.6, 0.98)
+    weight_decay = trial.suggest_float('weight_decay', 0.0, 0.001)
+    # batch_size = trial.suggest_int('batch_size', 16, 64, step=16)
+
+    # YOLO 모델 초기화
     model = YOLO('yolov11n_det.yaml')
 
-    # Trainer = HPO_Trainer(model)
+    step = 0
 
-    # Trial 생성
-    hyperparameters = {key: trial.suggest_float(key, *value) for key, value in search_space.items()}
-    for key in hyperparameters.keys():
-        hyperparameters[key] = float(hyperparameters[key])
-
+    # 학습 파라미터 설정
     train_args = {
-        'project': 'optuna_yolo',  # Directory to save training results
-        'name': f'trial_{trial.number}',  # trail number
-        'data': 'voc.yaml',  # 데이터 config yaml
-        'seed' : 0, # 공정한 성능 평가를 위해 모델의 seed는 0으로 설정정
-        'epochs': 1,
-        'imgsz' : 160,
-        'batch' : 256,
+        'data': 'voc.yaml',  # 데이터셋 구성 파일 경로
+        'epochs': 10,            # 총 학습 에포크 수
+        'imgsz': 640,            # 입력 이미지 크기
+        'lr0': lr0,              # 초기 학습률
+        'momentum': momentum,    # 모멘텀
         'device' : [0, 1],
         'val' : False,
-        'lr0' : hyperparameters['lr0'],
-        'lrf' : hyperparameters['lrf'],
-        'momentum' : hyperparameters['momentum'],
-        'optimizer' : 'adamW'
+        'plots' : False,
+        'weight_decay': weight_decay,  # 가중치 감쇠
+        'batch': 128,      # 배치 크기
+        'project': 'optuna_yolov11',   # 결과 저장 경로
+        'name': f'trial_{trial.number}' # 각 실험에 대한 고유 이름
     }
 
-    for step in range(args['n_train_iter']):
-        model.train(**train_args)
-
-        metrics = model.val(data = 'voc.yaml', imgsz = 160, device = [0, 1], batch = 256)
+    model.train(**train_args)
     
-        # 주요 메트릭 추출
-        metrics = {
-            'mAP50': float(metrics.box.map50),
-            'mAP50-95': float(metrics.box.map),
-            'precision': float(metrics.box.mp),
-            'recall': float(metrics.box.mr)
-        }
+    return 0.1
 
-        trial.report(metrics['mAP50'], step)
-        if trial.should_prune():
-            print('this trial is pruned!')
-            raise optuna.TrialPruned()
-
-    return metrics['mAP50']
-
-def main(args, search_space):
-
+if __name__ == '__main__':
     # Sampler 설정
     if args['sampling'] == 'GRID':
         sampler = GridSampler()
@@ -106,12 +145,5 @@ def main(args, search_space):
         pruner = pruner,
         direction = 'maximize'
     )
+
     study.optimize(objective, n_trials = args['n_trial'])
-
-    return None
-
-
-
-if __name__ == '__main__':
-
-    main(args, search_space)

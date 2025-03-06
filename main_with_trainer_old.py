@@ -8,6 +8,10 @@ from optuna.samplers import GridSampler, TPESampler
 from optuna.pruners import HyperbandPruner, SuccessiveHalvingPruner
 from ultralytics import YOLO
 
+from ultralytics.nn.tasks import DetectionModel
+from ultralytics.models.yolo.detect import DetectionTrainer
+
+from Trainer import YOLODetectionTrainer
 
 # 탐색 공간 설정 로드
 with open('hpo_search_space.yaml') as f:
@@ -16,17 +20,16 @@ with open('hpo_search_space.yaml') as f:
 # HPO 알고리즘 설정 로드
 with open('hpo_arguments.yaml') as f:
     args = yaml.safe_load(f)
+'''
+TODO LIST
+1. SEED 설정 코드 추가
 
-# TPE, PRuning => 매 epoch마다 학습 => 추론 => pruning
-## 1 epoch 학습 시키고 여러가지 파라미터에 대해서 => 성능지표로 pruning
-## n epoch 학습시킨 결과들을가지고 => sampling
+TPE, PRuning => 매 epoch마다 학습 => 추론 => pruning
+1 epoch 학습때 마다 시키고 여러가지 파라미터에 대해서 => 성능지표로 pruning
+n epoch 학습시킨 결과들을가지고 => sampling
+'''
 
 def objective(trial):
-    
-    # YOLO 모델 및 Trainer 생성
-    model = YOLO('yolov11n_det.yaml')
-
-    # Trainer = HPO_Trainer(model)
 
     # Trial 생성
     hyperparameters = {key: trial.suggest_float(key, *value) for key, value in search_space.items()}
@@ -38,21 +41,25 @@ def objective(trial):
         'name': f'trial_{trial.number}',  # trail number
         'data': 'voc.yaml',  # 데이터 config yaml
         'seed' : 0, # 공정한 성능 평가를 위해 모델의 seed는 0으로 설정정
-        'epochs': 1,
+        'epochs': 1, #
         'imgsz' : 160,
         'batch' : 256,
-        'device' : [0, 1],
+        'device' : [0],
         'val' : False,
+        'resume' : False,
         'lr0' : hyperparameters['lr0'],
         'lrf' : hyperparameters['lrf'],
         'momentum' : hyperparameters['momentum'],
         'optimizer' : 'adamW'
     }
 
+    YOLO_Trainer = YOLODetectionTrainer(overrides = train_args)
+    YOLO_Trainer.train()
+    exit()
     for step in range(args['n_train_iter']):
-        model.train(**train_args)
 
-        metrics = model.val(data = 'voc.yaml', imgsz = 160, device = [0, 1], batch = 256)
+        YOLO_Trainer.train()
+        metrics, fitness = YOLO_Trainer.validate()
     
         # 주요 메트릭 추출
         metrics = {
@@ -96,7 +103,7 @@ def main(args, search_space):
         pruner = None
 
     if sampler == None or pruner == None:
-        print('hpo_arguments.yaml 파일을 다시 작성해주세요')
+        print('Sampler 또는 Pruner값이 None으로 설정되어 있습니다.')
     
     # logger 설정 및 HPO 진행
     optuna.logging.get_logger('optuna').addHandler(logging.StreamHandler(sys.stdout))
