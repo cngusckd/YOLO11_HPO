@@ -1,39 +1,117 @@
-from ultralytics.nn.tasks import DetectionModel
-from ultralytics.models.yolo.detect import DetectionTrainer
+import optuna
+import sys
+import logging
+import yaml
+import numpy as np
 
-# 콜백 함수 정의: 각 epoch 종료 시 호출되어 성능 지표를 출력합니다.
-def log_metrics(trainer):
-    # 현재 epoch 번호
-    current_epoch = trainer.epoch + 1
-    # 손실 값
-    loss = trainer.loss
-    # 기타 성능 지표 (예: mAP)
-    metrics = trainer.metrics
-    print(f"Epoch {current_epoch}: Loss = {loss}, Metrics = {metrics}")
+from optuna.samplers import GridSampler, TPESampler
+from optuna.pruners import HyperbandPruner, SuccessiveHalvingPruner
+from ultralytics import YOLO
 
-# 사용자 정의 트레이너 클래스 정의
-class CustomTrainer(DetectionTrainer):
-    def get_model(self, cfg=None, weights=None, verbose=True):
-        """구성 파일(cfg)과 가중치(weights)를 사용하여 YOLO 모델을 로드합니다."""
-        model = DetectionModel(cfg, nc=self.data["nc"], verbose=verbose and RANK == -1)
-        if weights:
-            model.load(weights)
-        return model
+from Trainer import HPO_Trainer
 
-# 학습 설정
-overrides = {
-    'model': 'yolov11.yaml',  # 모델 구성 파일
-    'data': 'voc.yaml',   # 데이터셋 구성 파일
-    'epochs': 50,             # 총 학습 epoch 수
-    'batch': 1,              # 배치 크기
-    'imgsz': 640,             # 입력 이미지 크기
-}
+# 탐색 공간 설정 로드
+with open('hpo_search_space.yaml') as f:
+    search_space = yaml.safe_load(f)
 
-# 트레이너 인스턴스 생성
-trainer = CustomTrainer(overrides=overrides)
+# HPO 알고리즘 설정 로드
+with open('hpo_arguments.yaml') as f:
+    args = yaml.safe_load(f)
 
-# 콜백 함수 등록
-trainer.add_callback("on_train_epoch_end", log_metrics)
+# TPE, PRuning => 매 epoch마다 학습 => 추론 => pruning
+## 1 epoch 학습 시키고 여러가지 파라미터에 대해서 => 성능지표로 pruning
+## n epoch 학습시킨 결과들을가지고 => sampling
 
-# 학습 시작
-trainer.train()
+def objective(trial):
+    
+    # YOLO 모델 및 Trainer 생성
+    model = YOLO('yolov11n_det.yaml')
+
+    # Trainer = HPO_Trainer(model)
+
+    # Trial 생성
+    hyperparameters = {key: trial.suggest_float(key, *value) for key, value in search_space.items()}
+    for key in hyperparameters.keys():
+        hyperparameters[key] = float(hyperparameters[key])
+
+    train_args = {
+        'project': 'optuna_yolo',  # Directory to save training results
+        'name': f'trial_{trial.number}',  # trail number
+        'data': 'voc.yaml',  # 데이터 config yaml
+        'seed' : 0, # 공정한 성능 평가를 위해 모델의 seed는 0으로 설정정
+        'epochs': 1,
+        'imgsz' : 160,
+        'batch' : 256,
+        'device' : [0, 1],
+        'val' : False,
+        'lr0' : hyperparameters['lr0'],
+        'lrf' : hyperparameters['lrf'],
+        'momentum' : hyperparameters['momentum'],
+        'optimizer' : 'adamW'
+    }
+
+    for step in range(args['n_train_iter']):
+        model.train(**train_args)
+
+        metrics = model.val(data = 'voc.yaml', imgsz = 160, device = [0, 1], batch = 256)
+    
+        # 주요 메트릭 추출
+        metrics = {
+            'mAP50': float(metrics.box.map50),
+            'mAP50-95': float(metrics.box.map),
+            'precision': float(metrics.box.mp),
+            'recall': float(metrics.box.mr)
+        }
+
+        trial.report(metrics['mAP50'], step)
+        if trial.should_prune():
+            print('this trial is pruned!')
+            raise optuna.TrialPruned()
+
+    return metrics['mAP50']
+
+def main(args, search_space):
+
+    # Sampler 설정
+    if args['sampling'] == 'GRID':
+        sampler = GridSampler()
+    elif args['sampling'] == 'TPE':
+        sampler = TPESampler(n_startup_trials = args['n_startup_trials'])
+    else:
+        sampler = None
+    
+    # Pruner 설정
+    if args['pruning'] == 'Hyperband':
+        pruner = HyperbandPruner(
+            min_resource = args['min_resource'],
+            max_resource = args['n_trial'],
+            reduction_factor = args['reduction_factor']
+            )
+        
+    elif args['pruning'] == 'ASH':
+        pruner = SuccessiveHalvingPruner(
+            min_resource = args['min_resource'],
+            reduction_factor = args['reduction_factor']
+        )
+    else:
+        pruner = None
+
+    if sampler == None or pruner == None:
+        print('hpo_arguments.yaml 파일을 다시 작성해주세요')
+    
+    # logger 설정 및 HPO 진행
+    optuna.logging.get_logger('optuna').addHandler(logging.StreamHandler(sys.stdout))
+    study = optuna.create_study(
+        sampler = sampler,
+        pruner = pruner,
+        direction = 'maximize'
+    )
+    study.optimize(objective, n_trials = args['n_trial'])
+
+    return None
+
+
+
+if __name__ == '__main__':
+
+    main(args, search_space)
