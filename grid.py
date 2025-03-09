@@ -38,7 +38,7 @@ def objective(trial):
         'name': f'trial_{trial.number}',  # trail number
         'data': 'voc.yaml',  # 데이터 config yaml
         'seed' : 0, # 공정한 성능 평가를 위해 모델의 seed는 0으로 설정정
-        'epochs': 1,
+        'epochs': 10,
         'imgsz' : 160,
         'batch' : 256,
         'device' : [0, 1],
@@ -49,23 +49,18 @@ def objective(trial):
         'optimizer' : 'adamW'
     }
 
-    for step in range(args['n_train_iter']):
-        model.train(**train_args)
+    model.train(**train_args)
 
-        metrics = model.val(data = 'voc.yaml', imgsz = 160, device = [0, 1], batch = 256)
-    
-        # 주요 메트릭 추출
-        metrics = {
-            'mAP50': float(metrics.box.map50),
-            'mAP50-95': float(metrics.box.map),
-            'precision': float(metrics.box.mp),
-            'recall': float(metrics.box.mr)
-        }
+    metrics = model.val(data = 'voc.yaml', imgsz = 160, device = [0, 1], batch = 256)
 
-        trial.report(metrics['mAP50'], step)
-        if trial.should_prune():
-            print('this trial is pruned!')
-            raise optuna.TrialPruned()
+    # 주요 메트릭 추출
+    metrics = {
+        'mAP50': float(metrics.box.map50),
+        'mAP50-95': float(metrics.box.map),
+        'precision': float(metrics.box.mp),
+        'recall': float(metrics.box.mr)
+    }
+
 
     return metrics['mAP50']
 

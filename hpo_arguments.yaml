@@ -1,5 +1,5 @@
-sampling : 'TPE' # Grid or TPE
-pruning : 'Hyperband' # Hyperband or ASH
+sampling : 'Grid' # Grid or TPE
+pruning : 'None' # Hyperband or ASH
 n_startup_trials : 5
 min_resource : 5
 reduction_factor : 3
