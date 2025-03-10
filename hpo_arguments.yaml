@@ -1,7 +1,20 @@
 sampling : 'Grid' # Grid or TPE
 pruning : 'None' # Hyperband or ASH
+
+# hyperparameter for HPO
+SEED : 42
+device_idx : [0, 1]
+image_resize : 640
+training_epochs : 10
+training_batch: 64
+validation_batch : 128
 n_startup_trials : 5
 min_resource : 5
 reduction_factor : 3
 n_train_iter : 100
 n_trial : 1000
+
+# Task & Dataset
+task : 'detect' # task 설정, ['detect', 'segment']
+model_yaml_dir : 'yolov11n_det.yaml' # task에 맞는 모델 아키텍처 설정
+dataset_yaml_dir : 'voc.yaml' # dataset 설정

@@ -1,3 +1,8 @@
 /optuna_yolo
 optuna_yolo
 runs
+datasets
+
+__pycache__
+
+yolo11n.pt
