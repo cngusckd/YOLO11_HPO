@@ -6,3 +6,6 @@ datasets
 __pycache__
 
 yolo11n.pt
+dist
+custom_tuil.egg-info
+build

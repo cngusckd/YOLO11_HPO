@@ -39,7 +39,7 @@ def objective(trial):
         'project': 'optuna_yolo',  # Directory to save training results
         'name': f'trial_{trial.number}',  # trail number
         'data': args['dataset_yaml_dir'],  # 데이터 config yaml
-        'seed' : args['SEED'], # 공정한 성능 평가를 위해 모델의 seed는 0으로 설정정
+        'seed' : args['SEED'], # 공정한 성능 평가를 위해 모델의 seed는 0으로 설정
         'epochs': args['training_epochs'], # training epochs
         'imgsz' : args['image_resize'], # resize 이미지 크기
         'batch' : args['training_batch'], # batch size, GPU 자원에 맞게 할당

@@ -1,12 +1,16 @@
-sampling : 'Grid' # Grid or TPE
-pruning : 'None' # Hyperband or ASH
+# HPO Algo
+sampling : 'TPE' # Grid or TPE
+pruning : 'Hyperband' # Hyperband or ASH
+
+# Multi-Objective
+Objective : ['mAP50', 'precision']
 
 # hyperparameter for HPO
 SEED : 42
-device_idx : [0, 1]
-image_resize : 640
+device_idx : [0]
+image_resize : 128
 training_epochs : 10
-training_batch: 64
+training_batch: 512
 validation_batch : 128
 n_startup_trials : 5
 min_resource : 5
